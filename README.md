@@ -10,6 +10,34 @@ AIEmbedder is a powerful tool for embedding documents into vector databases for 
 - Generate embeddings using state-of-the-art models
 - Store and query vector embeddings with ChromaDB
 - User-friendly GUI with progress tracking and detailed logs
+- Create optimized chunks with rich metadata for GPT4All embeddings
+
+## GPT4All Integration
+
+AIEmbedder is specifically optimized for use with GPT4All's local document embeddings. Each chunk includes rich metadata that improves the semantic search precision:
+
+### Enhanced Metadata
+
+Each document chunk includes:
+- Document context (filename, type, path)
+- Position information (beginning, middle, end)
+- Chunk statistics (index, total chunks, content length)
+- Processing parameters (cleaning level, chunk size, overlap)
+- Timestamps and file information
+
+This metadata helps GPT4All better understand the document context and improves the semantic matching between queries and chunks. When using AIEmbedder with GPT4All:
+
+1. Process your documents with AIEmbedder
+2. Point GPT4All to your chunks directory
+3. Enjoy more precise and contextually relevant responses
+
+### Chunks Directory
+
+The processed chunks are stored in the configured chunks directory with a clear hierarchical structure:
+- Each document gets its own subdirectory
+- Chunks are numbered sequentially for easy navigation
+- Metadata is included as comments at the top of each file
+- Content is clearly separated from metadata with a divider
 
 ## Installation
 

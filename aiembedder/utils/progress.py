@@ -74,7 +74,7 @@ class ProgressTracker:
         )
         self._notify_callbacks(task_id)
     
-    def update_task(self, task_id: str, current: int, status: str) -> None:
+    def update_task(self, task_id: str, current: int = None, status: str = None) -> None:
         """Update task progress.
         
         Args:
@@ -83,8 +83,21 @@ class ProgressTracker:
             status: Status message
         """
         if task_id in self.tasks:
-            self.tasks[task_id].current = current
-            self.tasks[task_id].status = status
+            if current is not None:
+                self.tasks[task_id].current = current
+            if status is not None:
+                self.tasks[task_id].status = status
+            self._notify_callbacks(task_id)
+    
+    def set_total(self, task_id: str, total: int) -> None:
+        """Update the total value for an existing task.
+        
+        Args:
+            task_id: Task identifier
+            total: New total value
+        """
+        if task_id in self.tasks:
+            self.tasks[task_id].total = total
             self._notify_callbacks(task_id)
     
     def complete_task(self, task_id: str, status: str = "Complete") -> None:

@@ -38,11 +38,13 @@ class Config:
                 "chunk_overlap": 50,
                 "remove_stopwords": False,
                 "dedup_threshold": 0.95,
-                "use_gpu": True
+                "use_gpu": True,
+                "chunks_directory": str(Path.home() / ".aiembedder" / "chunks"),
+                "optimize_for_gpt4all": True
             },
             "database": {
                 "collection_name": "localdocs_collection",
-                "persist_directory": "output/vector_db",
+                "persist_directory": str(Path.home() / ".aiembedder" / "db"),
                 "embedding_model": "all-MiniLM-L6-v2"
             },
             "gui": {
@@ -59,9 +61,64 @@ class Config:
             if os.path.exists(self.config_path):
                 with open(self.config_path, 'r') as f:
                     loaded_config = json.load(f)
+                    
+                    # Fix legacy flat keys (e.g., "processing.chunk_size")
+                    flat_keys = [k for k in loaded_config.keys() if "." in k]
+                    for key in flat_keys:
+                        if "." in key:
+                            section, subkey = key.split(".", 1)
+                            if section not in loaded_config:
+                                loaded_config[section] = {}
+                            loaded_config[section][subkey] = loaded_config[key]
+                            # Remove the flat key
+                            del loaded_config[key]
+                    
+                    # Update the config with fixed format
                     self.config.update(loaded_config)
+                    
+                    # Ensure critical values exist after loading
+                    # This handles cases where config file might be missing newer settings
+                    if "processing" not in self.config:
+                        self.config["processing"] = {}
+                    
+                    # Ensure chunks directory is set with valid path
+                    if "chunks_directory" not in self.config["processing"] or not self._is_valid_path(self.config["processing"]["chunks_directory"]):
+                        self.config["processing"]["chunks_directory"] = str(Path.home() / ".aiembedder" / "chunks")
+                        self.save()  # Save to ensure it's written to file
+                        
+                    # Ensure cleaning level has a valid value
+                    if "cleaning_level" not in self.config["processing"] or not self.config["processing"]["cleaning_level"]:
+                        self.config["processing"]["cleaning_level"] = "medium"
+                        self.save()
         except Exception as e:
             print(f"Error loading configuration: {e}")
+            # If config is corrupt, restore defaults
+            self.config = self._load_default_config()
+            self.save()
+    
+    def _is_valid_path(self, path_str: str) -> bool:
+        """Check if a path string is valid.
+        
+        Args:
+            path_str: The path string to check
+            
+        Returns:
+            True if path is valid, False otherwise
+        """
+        if not path_str or not isinstance(path_str, str):
+            return False
+            
+        # Check for obvious error patterns in path
+        if path_str.startswith("Traceback") or "Error" in path_str:
+            return False
+            
+        # Try to construct a path object
+        try:
+            path = Path(path_str.replace("~", str(Path.home())))
+            # Check if parent directory exists or is a home directory
+            return path.parent.exists() or "~" in path_str or ".aiembedder" in path_str
+        except Exception:
+            return False
     
     def save(self) -> None:
         """Save configuration to file."""
@@ -82,7 +139,13 @@ class Config:
         Returns:
             Configuration value
         """
-        return self.config.get(section, {}).get(key, default)
+        value = self.config.get(section, {}).get(key, default)
+        
+        # If value looks like a path and it's invalid, return default
+        if key.endswith('_directory') and isinstance(value, str) and not self._is_valid_path(value):
+            return default
+            
+        return value
     
     def set(self, section: str, key: str, value: Any) -> None:
         """Set configuration value.
@@ -94,6 +157,15 @@ class Config:
         """
         if section not in self.config:
             self.config[section] = {}
+            
+        # Check if we're setting a directory path and it looks invalid
+        if key.endswith('_directory') and isinstance(value, str) and not self._is_valid_path(value):
+            # Use default path instead
+            if key == "chunks_directory":
+                value = str(Path.home() / ".aiembedder" / "chunks")
+            elif key == "persist_directory":
+                value = str(Path.home() / ".aiembedder" / "db")
+                
         self.config[section][key] = value
         self.save()
     

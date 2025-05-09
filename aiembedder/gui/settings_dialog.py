@@ -5,6 +5,7 @@ Settings dialog for AIEmbedder GUI.
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import Optional, Dict, Any
+from pathlib import Path
 
 from aiembedder.utils.config import Config
 
@@ -149,6 +150,20 @@ class SettingsDialog:
         self.similarity_entry = ttk.Spinbox(self.similarity_frame, from_=0.5, to=1.0, increment=0.01, textvariable=self.similarity_var)
         self.similarity_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
+        # Chunks directory
+        self.chunks_dir_frame = ttk.Frame(self.processing_frame)
+        self.chunks_dir_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        self.chunks_dir_label = ttk.Label(self.chunks_dir_frame, text="Chunks directory:")
+        self.chunks_dir_label.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.chunks_dir_var = tk.StringVar(value="~/.aiembedder/chunks")
+        self.chunks_dir_entry = ttk.Entry(self.chunks_dir_frame, textvariable=self.chunks_dir_var)
+        self.chunks_dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        self.chunks_dir_button = ttk.Button(self.chunks_dir_frame, text="Browse", command=self.browse_chunks_dir)
+        self.chunks_dir_button.pack(side=tk.LEFT, padx=(5, 0))
+        
         # Use GPU
         self.gpu_frame = ttk.Frame(self.processing_frame)
         self.gpu_frame.pack(fill=tk.X, pady=(0, 5))
@@ -156,6 +171,30 @@ class SettingsDialog:
         self.gpu_var = tk.BooleanVar(value=True)
         self.gpu_check = ttk.Checkbutton(self.gpu_frame, text="Use GPU for processing (if available)", variable=self.gpu_var)
         self.gpu_check.pack(anchor=tk.W)
+        
+        # GPT4All optimization
+        self.gpt4all_frame = ttk.Frame(self.processing_frame)
+        self.gpt4all_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        self.gpt4all_optimize_var = tk.BooleanVar(value=True)
+        self.gpt4all_check = ttk.Checkbutton(
+            self.gpt4all_frame, 
+            text="Optimize chunks for GPT4All embeddings", 
+            variable=self.gpt4all_optimize_var
+        )
+        self.gpt4all_check.pack(anchor=tk.W)
+        
+        # GPT4All info 
+        self.gpt4all_info_frame = ttk.Frame(self.processing_frame)
+        self.gpt4all_info_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        self.gpt4all_info = ttk.Label(
+            self.gpt4all_info_frame, 
+            text="This will enhance chunks with additional context and normalize text to improve GPT4All embedding precision.",
+            wraplength=400,
+            justify=tk.LEFT
+        )
+        self.gpt4all_info.pack(anchor=tk.W, padx=(20, 0))
     
     def create_database_settings(self):
         """Create database settings tab."""
@@ -268,7 +307,9 @@ class SettingsDialog:
         self.chunk_var.set(self.config.get("processing", "chunk_size", 400))
         self.overlap_var.set(self.config.get("processing", "chunk_overlap", 50))
         self.similarity_var.set(self.config.get("processing", "dedup_threshold", 0.95))
+        self.chunks_dir_var.set(self.config.get("processing", "chunks_directory", "~/.aiembedder/chunks"))
         self.gpu_var.set(self.config.get("processing", "use_gpu", True))
+        self.gpt4all_optimize_var.set(self.config.get("processing", "optimize_for_gpt4all", True))
         
         # Database settings
         self.collection_var.set(self.config.get("database", "collection_name", "aiembedder"))
@@ -291,7 +332,15 @@ class SettingsDialog:
         self.config.set("processing", "chunk_size", self.chunk_var.get())
         self.config.set("processing", "chunk_overlap", self.overlap_var.get())
         self.config.set("processing", "dedup_threshold", self.similarity_var.get())
+        
+        # Explicitly ensure chunks directory is set correctly
+        chunks_dir = self.chunks_dir_var.get()
+        if not chunks_dir:
+            chunks_dir = "~/.aiembedder/chunks"  # Default if empty
+        self.config.set("processing", "chunks_directory", chunks_dir)
+        
         self.config.set("processing", "use_gpu", self.gpu_var.get())
+        self.config.set("processing", "optimize_for_gpt4all", self.gpt4all_optimize_var.get())
         
         # Database settings
         self.config.set("database", "collection_name", self.collection_var.get())
@@ -329,6 +378,16 @@ class SettingsDialog:
         
         if directory:
             self.log_dir_var.set(directory)
+    
+    def browse_chunks_dir(self):
+        """Browse for chunks directory."""
+        directory = filedialog.askdirectory(
+            title="Select Chunks Directory",
+            initialdir=self.chunks_dir_var.get().replace("~", str(Path.home()))
+        )
+        
+        if directory:
+            self.chunks_dir_var.set(directory)
     
     def on_save(self):
         """Handle save button click."""

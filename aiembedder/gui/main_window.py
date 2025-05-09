@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 import threading
 import queue
+import re
+from datetime import datetime
 
 from aiembedder.utils.config import Config
 from aiembedder.utils.logging import Logger
@@ -97,6 +99,12 @@ class MainWindow:
         self.database_menu.add_command(label="Reset Database", command=self.reset_database)
         self.menu_bar.add_cascade(label="Database", menu=self.database_menu)
         
+        # Tools menu
+        self.tools_menu = tk.Menu(self.menu_bar, tearoff=0)
+        self.tools_menu.add_command(label="Show Processing Errors", command=self.show_errors)
+        self.tools_menu.add_command(label="Check Chunks Folder", command=self.check_chunks_folder)
+        self.menu_bar.add_cascade(label="Tools", menu=self.tools_menu)
+        
         # Help menu
         self.help_menu = tk.Menu(self.menu_bar, tearoff=0)
         self.help_menu.add_command(label="About", command=self.show_about)
@@ -110,46 +118,64 @@ class MainWindow:
         # Main frame
         self.main_frame = ttk.Frame(self.root, padding="10")
         
-        # Input panel
-        self.input_frame = ttk.LabelFrame(self.main_frame, text="Input", padding="10")
+        # Header
+        self.header_label = ttk.Label(
+            self.main_frame, 
+            text="AIEmbedder",
+            font=("Helvetica", 16, "bold")
+        )
         
-        # File selection
-        self.file_frame = ttk.Frame(self.input_frame)
-        self.file_label = ttk.Label(self.file_frame, text="Selected files/directories:")
-        self.file_listbox = tk.Listbox(self.file_frame, height=5, selectmode=tk.EXTENDED)
-        self.file_scrollbar = ttk.Scrollbar(self.file_frame, orient="vertical", command=self.file_listbox.yview)
-        self.file_listbox.configure(yscrollcommand=self.file_scrollbar.set)
+        # Description
+        self.description = ttk.Label(
+            self.main_frame,
+            text="Embed documents into vector databases for semantic search.",
+            wraplength=400
+        )
         
-        self.file_buttons_frame = ttk.Frame(self.input_frame)
-        self.add_file_button = ttk.Button(self.file_buttons_frame, text="Add File", command=self.open_file)
-        self.add_dir_button = ttk.Button(self.file_buttons_frame, text="Add Directory", command=self.open_directory)
-        self.remove_selected_button = ttk.Button(self.file_buttons_frame, text="Remove Selected", command=self.remove_selected)
-        self.clear_all_button = ttk.Button(self.file_buttons_frame, text="Clear All", command=self.clear_all)
+        # File panel
+        self.file_frame = ttk.LabelFrame(self.main_frame, text="Files", padding="10")
         
-        # Process options
+        # File listbox
+        self.file_list_frame = ttk.Frame(self.file_frame)
+        self.file_listbox = tk.Listbox(self.file_list_frame, selectmode=tk.EXTENDED, height=5)
+        self.file_scrollbar = ttk.Scrollbar(self.file_list_frame, command=self.file_listbox.yview)
+        self.file_listbox.config(yscrollcommand=self.file_scrollbar.set)
+        
+        # File buttons
+        self.file_button_frame = ttk.Frame(self.file_frame)
+        self.add_file_button = ttk.Button(self.file_button_frame, text="Add File", command=self.open_file)
+        self.add_dir_button = ttk.Button(self.file_button_frame, text="Add Directory", command=self.open_directory)
+        self.remove_button = ttk.Button(self.file_button_frame, text="Remove Selected", command=self.remove_selected)
+        self.clear_button = ttk.Button(self.file_button_frame, text="Clear All", command=self.clear_files)
+        
+        # Processing options panel
         self.options_frame = ttk.LabelFrame(self.main_frame, text="Processing Options", padding="10")
         
+        # Cleaning level
         self.cleaning_frame = ttk.Frame(self.options_frame)
         self.cleaning_label = ttk.Label(self.cleaning_frame, text="Cleaning level:")
-        self.cleaning_var = tk.StringVar(value=self.config.get("processing.cleaning_level", "medium"))
+        self.cleaning_var = tk.StringVar(value=self.config.get("processing", "cleaning_level", "medium"))
         self.cleaning_combo = ttk.Combobox(self.cleaning_frame, textvariable=self.cleaning_var)
         self.cleaning_combo["values"] = ("light", "medium", "aggressive")
         self.cleaning_combo.state(["readonly"])
         
+        # Chunk size
         self.chunk_frame = ttk.Frame(self.options_frame)
         self.chunk_label = ttk.Label(self.chunk_frame, text="Chunk size:")
-        self.chunk_var = tk.IntVar(value=self.config.get("processing.chunk_size", 400))
-        self.chunk_entry = ttk.Spinbox(self.chunk_frame, from_=50, to=1000, increment=50, textvariable=self.chunk_var)
+        self.chunk_var = tk.IntVar(value=self.config.get("processing", "chunk_size", 400))
+        self.chunk_spinbox = ttk.Spinbox(self.chunk_frame, from_=50, to=1000, increment=50, textvariable=self.chunk_var)
         
+        # Chunk overlap
         self.overlap_frame = ttk.Frame(self.options_frame)
-        self.overlap_label = ttk.Label(self.overlap_frame, text="Overlap:")
-        self.overlap_var = tk.IntVar(value=self.config.get("processing.chunk_overlap", 50))
-        self.overlap_entry = ttk.Spinbox(self.overlap_frame, from_=0, to=500, increment=10, textvariable=self.overlap_var)
+        self.overlap_label = ttk.Label(self.overlap_frame, text="Chunk overlap:")
+        self.overlap_var = tk.IntVar(value=self.config.get("processing", "chunk_overlap", 50))
+        self.overlap_spinbox = ttk.Spinbox(self.overlap_frame, from_=0, to=200, increment=10, textvariable=self.overlap_var)
         
+        # Similarity threshold
         self.similarity_frame = ttk.Frame(self.options_frame)
         self.similarity_label = ttk.Label(self.similarity_frame, text="Similarity threshold:")
-        self.similarity_var = tk.DoubleVar(value=self.config.get("processing.similarity_threshold", 0.95))
-        self.similarity_entry = ttk.Spinbox(self.similarity_frame, from_=0.5, to=1.0, increment=0.01, textvariable=self.similarity_var)
+        self.similarity_var = tk.DoubleVar(value=self.config.get("processing", "dedup_threshold", 0.95))
+        self.similarity_spinbox = ttk.Spinbox(self.similarity_frame, from_=0.5, to=1.0, increment=0.01, textvariable=self.similarity_var)
         
         # Action buttons
         self.action_frame = ttk.Frame(self.main_frame)
@@ -176,21 +202,24 @@ class MainWindow:
         # Main frame
         self.main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Input panel
-        self.input_frame.pack(fill=tk.X, pady=(0, 10))
+        # Header
+        self.header_label.pack(pady=(0, 10))
+        self.description.pack(pady=(0, 10))
         
-        self.file_frame.pack(fill=tk.X, pady=(0, 5))
-        self.file_label.pack(anchor=tk.W)
+        # File panel
+        self.file_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.file_list_frame.pack(fill=tk.X, pady=(0, 5))
         self.file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.file_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.file_buttons_frame.pack(fill=tk.X)
+        self.file_button_frame.pack(fill=tk.X)
         self.add_file_button.pack(side=tk.LEFT, padx=(0, 5))
         self.add_dir_button.pack(side=tk.LEFT, padx=(0, 5))
-        self.remove_selected_button.pack(side=tk.LEFT, padx=(0, 5))
-        self.clear_all_button.pack(side=tk.LEFT)
+        self.remove_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.clear_button.pack(side=tk.LEFT)
         
-        # Process options
+        # Processing options panel
         self.options_frame.pack(fill=tk.X, pady=(0, 10))
         
         self.cleaning_frame.pack(fill=tk.X, pady=(0, 5))
@@ -199,15 +228,15 @@ class MainWindow:
         
         self.chunk_frame.pack(fill=tk.X, pady=(0, 5))
         self.chunk_label.pack(side=tk.LEFT, padx=(0, 5))
-        self.chunk_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.chunk_spinbox.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
         self.overlap_frame.pack(fill=tk.X, pady=(0, 5))
         self.overlap_label.pack(side=tk.LEFT, padx=(0, 5))
-        self.overlap_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.overlap_spinbox.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
-        self.similarity_frame.pack(fill=tk.X)
+        self.similarity_frame.pack(fill=tk.X, pady=(0, 5))
         self.similarity_label.pack(side=tk.LEFT, padx=(0, 5))
-        self.similarity_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.similarity_spinbox.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
         # Action buttons
         self.action_frame.pack(fill=tk.X, pady=(0, 10))
@@ -276,7 +305,7 @@ class MainWindow:
         
         self.update_buttons()
     
-    def clear_all(self):
+    def clear_files(self):
         """Clear all files."""
         self.file_listbox.delete(0, tk.END)
         self.update_buttons()
@@ -294,10 +323,19 @@ class MainWindow:
         if settings_dialog.result:
             self.logger.info("Settings updated")
             # Update UI with new settings
-            self.cleaning_var.set(self.config.get("processing.cleaning_level", "medium"))
-            self.chunk_var.set(self.config.get("processing.chunk_size", 400))
-            self.overlap_var.set(self.config.get("processing.chunk_overlap", 50))
-            self.similarity_var.set(self.config.get("processing.similarity_threshold", 0.95))
+            self.cleaning_var.set(self.config.get("processing", "cleaning_level", "medium"))
+            self.chunk_var.set(self.config.get("processing", "chunk_size", 400))
+            self.overlap_var.set(self.config.get("processing", "chunk_overlap", 50))
+            self.similarity_var.set(self.config.get("processing", "dedup_threshold", 0.95))
+            
+            # Ensure chunks directory exists
+            chunks_dir = Path(self.config.get("processing", "chunks_directory", "~/.aiembedder/chunks")).expanduser()
+            if not chunks_dir.exists():
+                try:
+                    chunks_dir.mkdir(parents=True, exist_ok=True)
+                    self.logger.info(f"Created chunks directory: {chunks_dir}")
+                except Exception as e:
+                    self.logger.error(f"Error creating chunks directory: {str(e)}")
     
     def open_search(self):
         """Open search dialog."""
@@ -309,9 +347,9 @@ class MainWindow:
         if messagebox.askyesno("Reset Database", "Are you sure you want to reset the database? This will delete all stored embeddings."):
             try:
                 # Create database with configured settings
-                collection_name = self.config.get("database.collection_name", "aiembedder")
-                persist_directory = self.config.get("database.persist_directory", "~/.aiembedder/db")
-                use_gpu = self.config.get("processing.use_gpu", True)
+                collection_name = self.config.get("database", "collection_name", "aiembedder")
+                persist_directory = self.config.get("database", "persist_directory", "~/.aiembedder/db")
+                use_gpu = self.config.get("processing", "use_gpu", True)
                 
                 db = VectorDatabase(
                     collection_name=collection_name,
@@ -367,12 +405,36 @@ class MainWindow:
                 messagebox.showerror("Invalid Settings", "Chunk overlap must be less than chunk size.")
                 return
             
+            # Create chunks directory if it doesn't exist
+            # Get chunks directory directly from config dictionary
+            if "processing" in self.config.config and "chunks_directory" in self.config.config["processing"]:
+                chunks_dir_path = self.config.config["processing"]["chunks_directory"]
+            else:
+                chunks_dir_path = "~/.aiembedder/chunks"  # Use default only if not found
+                # Set it in config
+                self.config.set("processing", "chunks_directory", chunks_dir_path)
+                self.logger.info(f"Set chunks_directory in config: {chunks_dir_path}")
+
+            chunks_dir = Path(chunks_dir_path).expanduser()
+            self.logger.info(f"Using chunks directory from config: {chunks_dir}")
+            
+            if not chunks_dir.exists():
+                try:
+                    chunks_dir.mkdir(parents=True, exist_ok=True)
+                    self.logger.info(f"Created chunks directory: {chunks_dir}")
+                except Exception as e:
+                    self.logger.error(f"Error creating chunks directory: {str(e)}")
+                    messagebox.showerror("Directory Error", f"Failed to create chunks directory: {str(e)}")
+                    return
+            
             # Update processing configuration
             self.config.update({
-                "processing.cleaning_level": self.cleaning_var.get(),
-                "processing.chunk_size": chunk_size,
-                "processing.chunk_overlap": chunk_overlap,
-                "processing.similarity_threshold": self.similarity_var.get()
+                "processing": {
+                    "cleaning_level": self.cleaning_var.get(),
+                    "chunk_size": chunk_size,
+                    "chunk_overlap": chunk_overlap,
+                    "dedup_threshold": self.similarity_var.get()
+                }
             })
             
             # Update UI state
@@ -425,11 +487,12 @@ class MainWindow:
             )
             
             # Get processing settings
-            cleaning_level = self.config.get("processing.cleaning_level", "medium")
-            chunk_size = self.config.get("processing.chunk_size", 400)
-            chunk_overlap = self.config.get("processing.chunk_overlap", 50)
-            similarity_threshold = self.config.get("processing.similarity_threshold", 0.95)
-            use_gpu = self.config.get("processing.use_gpu", True)
+            cleaning_level = self.config.get("processing", "cleaning_level", "medium")
+            chunk_size = self.config.get("processing", "chunk_size", 400)
+            chunk_overlap = self.config.get("processing", "chunk_overlap", 50)
+            similarity_threshold = self.config.get("processing", "dedup_threshold", 0.95)
+            use_gpu = self.config.get("processing", "use_gpu", True)
+            optimize_for_gpt4all = self.config.get("processing", "optimize_for_gpt4all", True)
             
             # Create processing components
             pipeline = TextProcessingPipeline(
@@ -438,19 +501,20 @@ class MainWindow:
                 chunk_overlap=chunk_overlap,
                 similarity_threshold=similarity_threshold,
                 use_gpu=use_gpu,
+                optimize_for_gpt4all=optimize_for_gpt4all,
                 progress_tracker=self.progress_tracker
             )
             
             # Create vector components
-            model_name = self.config.get("advanced.model_name", "all-MiniLM-L6-v2")
+            model_name = self.config.get("database", "embedding_model", "all-MiniLM-L6-v2")
             generator = VectorGenerator(
                 model_name=model_name,
                 use_gpu=use_gpu,
                 logger=self.logger
             )
             
-            collection_name = self.config.get("database.collection_name", "aiembedder")
-            persist_directory = self.config.get("database.persist_directory", "~/.aiembedder/db")
+            collection_name = self.config.get("database", "collection_name", "aiembedder")
+            persist_directory = self.config.get("database", "persist_directory", "~/.aiembedder/db")
             db = VectorDatabase(
                 collection_name=collection_name,
                 persist_directory=persist_directory,
@@ -485,7 +549,7 @@ class MainWindow:
                     self.progress_tracker.add_error(main_task_id, f"Error processing {file_path}: {str(e)}")
             
             # Complete main task
-            self.progress_tracker.update_task(main_task_id, current=len(file_paths))
+            self.progress_tracker.update_task(main_task_id, current=len(file_paths), status="Completed")
             self.progress_tracker.complete_task(main_task_id)
             
             # Add completion message to queue
@@ -510,24 +574,174 @@ class MainWindow:
             generator: Vector generator
             db: Vector database
         """
-        self.logger.info(f"Processing file: {file_path}")
+        try:
+            self.logger.info(f"Processing file: {file_path}")
+            
+            # Get appropriate processor
+            self.logger.info(f"Getting processor for file type: {file_path.suffix}")
+            processor = self.processor_factory.get_processor(file_path)
+            self.logger.info(f"Using processor: {processor.__class__.__name__}")
+            
+            # Extract text
+            self.logger.info(f"Extracting text from file: {file_path}")
+            text = processor.process(str(file_path))  # Using process() method from BaseProcessor
+            text_length = len(text)
+            self.logger.info(f"Extracted {text_length} characters from file: {file_path}")
+            
+            if text_length == 0:
+                self.logger.warning(f"No text extracted from file: {file_path}")
+                return
+            
+            # Process text
+            self.logger.info(f"Processing text through pipeline, length={text_length}")
+            chunks = pipeline.process_text(text, metadata={"source": str(file_path)})
+            self.logger.info(f"Created {len(chunks)} chunks from file: {file_path}")
+            
+            if not chunks:
+                self.logger.warning(f"No chunks created from file: {file_path}")
+                return
+            
+            # Generate embeddings
+            self.logger.info(f"Generating embeddings for {len(chunks)} chunks")
+            chunks_with_embeddings = generator.generate_embeddings(chunks)
+            self.logger.info(f"Generated embeddings for {len(chunks_with_embeddings)} chunks")
+            
+            if not chunks_with_embeddings:
+                self.logger.warning(f"No embeddings created for chunks from file: {file_path}")
+                return
+            
+            # Add to database
+            self.logger.info(f"Adding {len(chunks_with_embeddings)} chunks to database")
+            db.add_chunks(chunks_with_embeddings)
+            
+            # Save chunks to disk for GPT4All localdocs
+            self.logger.info(f"Saving {len(chunks)} chunks to disk")
+            self._save_chunks_to_disk(file_path, chunks)
+            
+            self.logger.info(f"Completed processing file: {file_path}")
+            
+        except Exception as e:
+            self.logger.error(f"Error processing file {file_path}: {str(e)}")
+            import traceback
+            self.logger.error(f"Stack trace:\n{traceback.format_exc()}")
+            
+            # Add error to task
+            task_ids = list(self.progress_tracker.get_all_tasks().keys())
+            if task_ids:
+                self.progress_tracker.add_error(task_ids[0], f"Error processing file {file_path}: {str(e)}")
+                
+            # Show error dialog
+            messagebox.showerror("Processing Error", f"Error processing file {file_path}:\n{str(e)}")
+    
+    def _save_chunks_to_disk(self, file_path: Path, chunks: List[Dict[str, Any]]):
+        """Save text chunks to disk for GPT4All localdocs.
         
-        # Get appropriate processor
-        processor = self.processor_factory.get_processor(file_path)
-        
-        # Extract text
-        text = processor.extract_text(file_path)
-        
-        # Process text
-        chunks = pipeline.process_text(text, metadata={"source": str(file_path)})
-        
-        # Generate embeddings
-        chunks_with_embeddings = generator.generate_embeddings(chunks)
-        
-        # Add to database
-        db.add_chunks(chunks_with_embeddings)
-        
-        self.logger.info(f"Completed processing file: {file_path}")
+        Args:
+            file_path: Original file path
+            chunks: List of text chunks with metadata
+        """
+        try:
+            # Get chunks directory from config
+            chunks_dir_path = self.config.get("processing", "chunks_directory", "~/.aiembedder/chunks")
+            self.logger.info(f"Using chunks directory from config: {chunks_dir_path}")
+            
+            # Create absolute path - handle various path formats correctly
+            if chunks_dir_path.startswith("~/"):
+                output_dir = Path.home() / chunks_dir_path[2:]
+            else:
+                output_dir = Path(chunks_dir_path)
+                
+            output_dir = output_dir.resolve()
+            self.logger.info(f"Using absolute chunks directory path: {output_dir}")
+            
+            # Ensure main chunks directory exists
+            if not output_dir.exists():
+                self.logger.info(f"Creating chunks directory: {output_dir}")
+                output_dir.mkdir(parents=True, exist_ok=True)
+            else:
+                self.logger.info(f"Chunks directory already exists: {output_dir}")
+            
+            # Create a unique, filesystem-safe folder name for this file
+            file_name = file_path.stem
+            parent_dir = file_path.parent.name
+            
+            # Create a folder name with parent directory to avoid conflicts
+            if parent_dir and parent_dir != ".":
+                folder_name = f"{parent_dir}_{file_name}"
+            else:
+                folder_name = file_name
+            
+            # Windows-safe folder name (remove invalid chars)
+            folder_name = re.sub(r'[\\/*?:"<>|]', "_", folder_name)
+            
+            # Create full path for the folder
+            chunk_dir = output_dir / folder_name
+            self.logger.info(f"Creating chunk subfolder: {chunk_dir}")
+            
+            # Create the folder for this file's chunks
+            chunk_dir.mkdir(parents=True, exist_ok=True)
+            self.logger.info(f"Created chunk subfolder successfully: {chunk_dir}")
+            
+            # Save each chunk as a separate file
+            self.logger.info(f"Saving {len(chunks)} chunks to {chunk_dir}")
+            
+            # Extract document info to add as context to each chunk
+            doc_info = {
+                "document_name": file_path.name,
+                "document_path": str(file_path),
+                "document_type": file_path.suffix.lstrip('.').upper(),
+                "total_chunks": len(chunks),
+                "created": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+            
+            # Try to get file stats for additional metadata
+            try:
+                stats = file_path.stat()
+                doc_info["size_bytes"] = stats.st_size
+                doc_info["modified"] = datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+            except Exception as e:
+                self.logger.debug(f"Could not get file stats: {str(e)}")
+            
+            for i, chunk in enumerate(chunks):
+                # Create chunk filename with leading zeros for proper sorting
+                chunk_file = chunk_dir / f"chunk_{i:04d}.txt"
+                self.logger.debug(f"Saving chunk {i+1}/{len(chunks)} to {chunk_file}")
+                
+                with open(chunk_file, "w", encoding="utf-8") as f:
+                    # Add document context header - critical for better GPT4All embeddings
+                    f.write(f"# DOCUMENT: {doc_info['document_name']}\n")
+                    f.write(f"# CHUNK: {i+1} of {doc_info['total_chunks']}\n")
+                    f.write(f"# TYPE: {doc_info['document_type']}\n")
+                    f.write(f"# CREATED: {doc_info['created']}\n")
+                    
+                    # Add source path as reference
+                    f.write(f"# SOURCE: {doc_info['document_path']}\n")
+                    
+                    # Add chunk position indicators for GPT4All context
+                    position = "BEGINNING" if i == 0 else "MIDDLE" if i < len(chunks) - 1 else "END"
+                    f.write(f"# POSITION: {position}\n")
+                    
+                    # Add any additional metadata from the chunks dictionary
+                    # These come from the pipeline processing
+                    if 'cleaning_level' in chunk:
+                        f.write(f"# CLEANING: {chunk['cleaning_level']}\n")
+                    if 'chunk_size' in chunk:
+                        f.write(f"# TOKENS_PER_CHUNK: {chunk['chunk_size']}\n")
+                    if 'chunk_overlap' in chunk:
+                        f.write(f"# OVERLAP_TOKENS: {chunk['chunk_overlap']}\n")
+                    
+                    # Add a separator for better visual parsing
+                    f.write("\n---\n\n")
+                    
+                    # Write the actual text content
+                    f.write(chunk['text'])
+            
+            self.logger.info(f"Successfully saved {len(chunks)} chunks to {chunk_dir}")
+            
+        except Exception as e:
+            self.logger.error(f"Error saving chunks to disk: {str(e)}")
+            import traceback
+            self.logger.error(f"Stack trace:\n{traceback.format_exc()}")
     
     def _process_directory(self, dir_path: Path, pipeline: TextProcessingPipeline,
                           generator: VectorGenerator, db: VectorDatabase):
@@ -541,20 +755,26 @@ class MainWindow:
         """
         self.logger.info(f"Processing directory: {dir_path}")
         
-        # Create directory task
-        dir_task_id = self.progress_tracker.start_task(
-            f"dir_{dir_path.name}",
-            status=f"Scanning directory {dir_path.name}"
-        )
-        
         try:
+            # Create directory task
+            dir_task_id = self.progress_tracker.start_task(
+                f"dir_{dir_path.name}",
+                total=100,  # Initialize with default value
+                status=f"Scanning directory {dir_path.name}"
+            )
+            
             # Get all files
             files = []
             for ext in [".txt", ".html", ".htm", ".pdf", ".doc", ".docx"]:
                 files.extend(dir_path.glob(f"**/*{ext}"))
             
-            # Update task with total files
-            self.progress_tracker.update_task(dir_task_id, total=len(files))
+            # Update the status with file count
+            self.logger.info(f"Found {len(files)} files in directory: {dir_path}")
+            self.progress_tracker.update_task(
+                dir_task_id, 
+                current=0,
+                status=f"Found {len(files)} files to process"
+            )
             
             # Process each file
             for i, file_path in enumerate(files):
@@ -562,10 +782,13 @@ class MainWindow:
                     break
                 
                 try:
+                    # Calculate percentage of completion for progress
+                    current_progress = int((i / len(files)) * 100) if files else 0
+                    
                     self.progress_tracker.update_task(
                         dir_task_id,
-                        current=i,
-                        status=f"Processing {file_path.name}"
+                        current=current_progress,
+                        status=f"Processing {file_path.name} ({i+1}/{len(files)})"
                     )
                     
                     self._process_single_file(file_path, pipeline, generator, db)
@@ -575,12 +798,22 @@ class MainWindow:
                     self.progress_tracker.add_error(dir_task_id, f"Error processing {file_path}: {str(e)}")
             
             # Complete directory task
-            self.progress_tracker.update_task(dir_task_id, current=len(files))
+            self.progress_tracker.update_task(
+                dir_task_id, 
+                current=100,  # Set to 100% complete
+                status=f"Completed processing {len(files)} files"
+            )
             self.progress_tracker.complete_task(dir_task_id)
             
         except Exception as e:
             self.logger.error(f"Error processing directory {dir_path}: {str(e)}")
-            self.progress_tracker.add_error(dir_task_id, f"Error processing directory {dir_path}: {str(e)}")
+            import traceback
+            self.logger.error(f"Stack trace:\n{traceback.format_exc()}")
+            
+            # Add error if task was created
+            if 'dir_task_id' in locals():
+                self.progress_tracker.add_error(dir_task_id, f"Error processing directory {dir_path}: {str(e)}")
+            
             raise
     
     def process_queue(self):
@@ -613,3 +846,193 @@ class MainWindow:
                 
                 # Update button state (full UI update will happen when thread ends)
                 self.stop_button.configure(state="disabled") 
+    
+    def show_errors(self):
+        """Show a list of all errors from the current processing."""
+        tasks = self.progress_tracker.get_all_tasks()
+        
+        # Collect all errors
+        all_errors = []
+        for task_id, state in tasks.items():
+            if state.errors:
+                all_errors.append(f"Task: {task_id}")
+                for i, error in enumerate(state.errors, 1):
+                    all_errors.append(f"  {i}. {error}")
+        
+        # Show errors in a dialog
+        if all_errors:
+            error_text = "\n".join(all_errors)
+            self.show_text_dialog("Processing Errors", error_text)
+        else:
+            messagebox.showinfo("Processing Errors", "No errors have been reported.")
+    
+    def check_chunks_folder(self):
+        """Check if the chunks folder is empty and show its contents."""
+        # Get chunks directory directly from config dictionary
+        if "processing" in self.config.config and "chunks_directory" in self.config.config["processing"]:
+            chunks_dir_path = self.config.config["processing"]["chunks_directory"]
+        else:
+            chunks_dir_path = "~/.aiembedder/chunks"  # Use default only if not found
+            # Set it in config
+            self.config.set("processing", "chunks_directory", chunks_dir_path)
+            self.logger.info(f"Set chunks_directory in config: {chunks_dir_path}")
+        
+        chunks_dir = Path(chunks_dir_path).expanduser().resolve()
+        self.logger.info(f"Checking chunks directory: {chunks_dir}")
+        
+        if not chunks_dir.exists():
+            if messagebox.askyesno("Chunks Folder", 
+                                f"The chunks folder does not exist: {chunks_dir}\n\nDo you want to create it?"):
+                try:
+                    chunks_dir.mkdir(parents=True, exist_ok=True)
+                    self.logger.info(f"Created chunks directory: {chunks_dir}")
+                    messagebox.showinfo("Chunks Folder", f"Created chunks directory: {chunks_dir}")
+                except Exception as e:
+                    self.logger.error(f"Error creating chunks directory: {str(e)}")
+                    messagebox.showerror("Error", f"Failed to create chunks directory: {str(e)}")
+            return
+        
+        # Get all chunk directories and files
+        chunk_dirs = [d for d in chunks_dir.iterdir() if d.is_dir()]
+        
+        if not chunk_dirs:
+            result = messagebox.askyesno("Chunks Folder", 
+                                       f"The chunks folder is empty: {chunks_dir}\n\nDo you want to open it?")
+            if result:
+                self.open_folder(chunks_dir)
+            return
+        
+        # Count files in each directory
+        dir_stats = []
+        total_chunks = 0
+        for dir in chunk_dirs:
+            chunk_files = list(dir.glob("*.txt"))
+            file_count = len(chunk_files)
+            total_chunks += file_count
+            dir_stats.append(f"{dir.name}: {file_count} chunks")
+        
+        # Show results
+        result_text = f"Chunks folder: {chunks_dir}\n\n"
+        result_text += f"Total chunks: {total_chunks}\n"
+        result_text += f"Source documents: {len(dir_stats)}\n\n"
+        result_text += "\n".join(dir_stats)
+        
+        self.show_chunks_dialog("Chunks Folder Contents", result_text, chunks_dir)
+    
+    def show_chunks_dialog(self, title, text, folder_path):
+        """Show a dialog with scrollable text and folder open button.
+        
+        Args:
+            title: Dialog title
+            text: Text to display
+            folder_path: Path to the folder to open
+        """
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.geometry("600x400")
+        dialog.minsize(400, 300)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Center the dialog
+        dialog.update_idletasks()
+        width = dialog.winfo_width()
+        height = dialog.winfo_height()
+        x = (self.root.winfo_width() - width) // 2 + self.root.winfo_x()
+        y = (self.root.winfo_height() - height) // 2 + self.root.winfo_y()
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Create text widget with scrollbar
+        frame = ttk.Frame(dialog, padding="10")
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        text_widget = tk.Text(frame, wrap=tk.WORD)
+        scrollbar = ttk.Scrollbar(frame, command=text_widget.yview)
+        text_widget.configure(yscrollcommand=scrollbar.set)
+        
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Insert text
+        text_widget.insert(tk.END, text)
+        text_widget.configure(state=tk.DISABLED)
+        
+        # Add buttons
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        open_button = ttk.Button(button_frame, text="Open Folder", 
+                               command=lambda: self.open_folder(folder_path))
+        open_button.pack(side=tk.LEFT)
+        
+        close_button = ttk.Button(button_frame, text="Close", command=dialog.destroy)
+        close_button.pack(side=tk.RIGHT)
+    
+    def open_folder(self, folder_path):
+        """Open a folder in the file explorer.
+        
+        Args:
+            folder_path: Path to open
+        """
+        try:
+            import os
+            import platform
+            
+            # Use the appropriate command based on the OS
+            if platform.system() == "Windows":
+                os.startfile(folder_path)
+            elif platform.system() == "Darwin":  # macOS
+                import subprocess
+                subprocess.Popen(["open", folder_path])
+            else:  # Linux
+                import subprocess
+                subprocess.Popen(["xdg-open", folder_path])
+                
+            self.logger.info(f"Opened folder: {folder_path}")
+        except Exception as e:
+            self.logger.error(f"Error opening folder: {str(e)}")
+            messagebox.showerror("Error", f"Failed to open folder: {str(e)}")
+    
+    def show_text_dialog(self, title, text):
+        """Show a dialog with scrollable text.
+        
+        Args:
+            title: Dialog title
+            text: Text to display
+        """
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.geometry("600x400")
+        dialog.minsize(400, 300)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Center the dialog
+        dialog.update_idletasks()
+        width = dialog.winfo_width()
+        height = dialog.winfo_height()
+        x = (self.root.winfo_width() - width) // 2 + self.root.winfo_x()
+        y = (self.root.winfo_height() - height) // 2 + self.root.winfo_y()
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Create text widget with scrollbar
+        frame = ttk.Frame(dialog, padding="10")
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        text_widget = tk.Text(frame, wrap=tk.WORD)
+        scrollbar = ttk.Scrollbar(frame, command=text_widget.yview)
+        text_widget.configure(yscrollcommand=scrollbar.set)
+        
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Insert text
+        text_widget.insert(tk.END, text)
+        text_widget.configure(state=tk.DISABLED)
+        
+        # Add close button
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        close_button = ttk.Button(button_frame, text="Close", command=dialog.destroy)
+        close_button.pack(side=tk.RIGHT) 
