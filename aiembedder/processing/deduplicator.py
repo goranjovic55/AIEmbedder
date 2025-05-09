@@ -25,6 +25,7 @@ class Deduplicator:
         
         # Check GPU availability
         self.device = "cuda" if use_gpu and torch.cuda.is_available() else "cpu"
+        self.use_gpu = use_gpu
         self.logger.info(f"Using device: {self.device}")
         
         # Initialize sentence transformer
@@ -34,15 +35,15 @@ class Deduplicator:
             self.logger.error(f"Failed to load sentence transformer: {str(e)}")
             raise ProcessingError("Failed to initialize deduplicator", "PROC_004")
     
-    def deduplicate(self, chunks: List[str], threshold: float = 0.95) -> List[str]:
-        """Remove duplicate chunks based on similarity.
+    def deduplicate_indices(self, chunks: List[str], threshold: float = 0.95) -> List[int]:
+        """Remove duplicate chunks and return indices of unique chunks.
         
         Args:
             chunks: List of text chunks
             threshold: Similarity threshold (0-1)
             
         Returns:
-            List of unique chunks
+            List of indices for unique chunks
             
         Raises:
             ProcessingError: If deduplication fails
@@ -66,22 +67,48 @@ class Deduplicator:
             # Calculate similarity matrix
             similarity_matrix = torch.mm(embeddings, embeddings.t())
             
-            # Get unique chunks
-            unique_chunks = []
+            # Get unique chunks indices
+            unique_indices = []
             seen_indices: Set[int] = set()
             
             for i in range(len(chunks)):
                 if i in seen_indices:
                     continue
                 
-                # Add current chunk
-                unique_chunks.append(chunks[i])
+                # Add current chunk index
+                unique_indices.append(i)
                 
                 # Find similar chunks
                 similar_indices = torch.where(similarity_matrix[i] > threshold)[0]
                 seen_indices.update(similar_indices.tolist())
             
-            self.logger.info(f"Removed {len(chunks) - len(unique_chunks)} duplicate chunks")
+            self.logger.info(f"Identified {len(unique_indices)} unique chunks out of {len(chunks)}")
+            return unique_indices
+            
+        except Exception as e:
+            self.logger.error(f"Error deduplicating chunks: {str(e)}")
+            raise ProcessingError(f"Failed to deduplicate chunks: {str(e)}", "PROC_004")
+    
+    def deduplicate(self, chunks: List[str], threshold: float = 0.95) -> List[str]:
+        """Remove duplicate chunks based on similarity.
+        
+        Args:
+            chunks: List of text chunks
+            threshold: Similarity threshold (0-1)
+            
+        Returns:
+            List of unique chunks
+            
+        Raises:
+            ProcessingError: If deduplication fails
+        """
+        try:
+            # Use the indices-based deduplication
+            unique_indices = self.deduplicate_indices(chunks, threshold)
+            
+            # Extract the unique chunks
+            unique_chunks = [chunks[i] for i in unique_indices]
+            
             return unique_chunks
             
         except Exception as e:

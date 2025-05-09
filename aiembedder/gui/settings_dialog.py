@@ -164,6 +164,42 @@ class SettingsDialog:
         self.chunks_dir_button = ttk.Button(self.chunks_dir_frame, text="Browse", command=self.browse_chunks_dir)
         self.chunks_dir_button.pack(side=tk.LEFT, padx=(5, 0))
         
+        # Document structure-aware chunking
+        self.structure_frame = ttk.Frame(self.processing_frame)
+        self.structure_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        self.structure_var = tk.BooleanVar(value=True)
+        self.structure_check = ttk.Checkbutton(
+            self.structure_frame, 
+            text="Respect document structure when chunking", 
+            variable=self.structure_var,
+            command=self.toggle_flexibility
+        )
+        self.structure_check.pack(anchor=tk.W)
+        
+        # Structure info
+        self.structure_info_frame = ttk.Frame(self.processing_frame)
+        self.structure_info_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        self.structure_info = ttk.Label(
+            self.structure_info_frame, 
+            text="This will try to keep logical sections like chapters together as complete chunks, even if they exceed the target chunk size.",
+            wraplength=400,
+            justify=tk.LEFT
+        )
+        self.structure_info.pack(anchor=tk.W, padx=(20, 0))
+        
+        # Chunk flexibility percent
+        self.flexibility_frame = ttk.Frame(self.processing_frame)
+        self.flexibility_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        self.flexibility_label = ttk.Label(self.flexibility_frame, text="Chunk flexibility (%):")
+        self.flexibility_label.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.flexibility_var = tk.IntVar(value=30)
+        self.flexibility_entry = ttk.Spinbox(self.flexibility_frame, from_=0, to=100, increment=5, textvariable=self.flexibility_var)
+        self.flexibility_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
         # Use GPU
         self.gpu_frame = ttk.Frame(self.processing_frame)
         self.gpu_frame.pack(fill=tk.X, pady=(0, 5))
@@ -301,62 +337,61 @@ class SettingsDialog:
         self.model_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
     
     def load_settings(self):
-        """Load settings from configuration."""
+        """Load settings from config."""
         # Processing settings
         self.clean_var.set(self.config.get("processing", "cleaning_level", "medium"))
         self.chunk_var.set(self.config.get("processing", "chunk_size", 400))
         self.overlap_var.set(self.config.get("processing", "chunk_overlap", 50))
-        self.similarity_var.set(self.config.get("processing", "dedup_threshold", 0.95))
+        self.similarity_var.set(self.config.get("processing", "similarity_threshold", 0.95))
         self.chunks_dir_var.set(self.config.get("processing", "chunks_directory", "~/.aiembedder/chunks"))
         self.gpu_var.set(self.config.get("processing", "use_gpu", True))
         self.gpt4all_optimize_var.set(self.config.get("processing", "optimize_for_gpt4all", True))
+        self.structure_var.set(self.config.get("processing", "respect_document_structure", True))
+        self.flexibility_var.set(self.config.get("processing", "chunk_flexibility_percent", 30))
+        
+        # Toggle flexibility state
+        self.toggle_flexibility()
         
         # Database settings
         self.collection_var.set(self.config.get("database", "collection_name", "aiembedder"))
-        self.db_dir_var.set(self.config.get("database", "persist_directory", "~/.aiembedder/db"))
+        self.db_dir_var.set(self.config.get("database", "directory", "~/.aiembedder/db"))
         self.limit_var.set(self.config.get("database", "search_limit", 5))
         
         # GUI settings
         self.title_var.set(self.config.get("gui", "window_title", "AIEmbedder"))
         self.theme_var.set(self.config.get("gui", "theme", "default"))
-        self.log_level_var.set(self.config.get("gui", "log_level", "INFO"))
         
         # Advanced settings
-        self.log_dir_var.set(self.config.get("gui", "log_directory", "~/.aiembedder/logs"))
-        self.model_var.set(self.config.get("database", "embedding_model", "all-MiniLM-L6-v2"))
+        self.log_level_var.set(self.config.get("logging", "level", "INFO"))
+        self.log_dir_var.set(self.config.get("logging", "directory", "~/.aiembedder/logs"))
     
     def save_settings(self):
-        """Save settings to configuration."""
+        """Save settings to config."""
         # Processing settings
         self.config.set("processing", "cleaning_level", self.clean_var.get())
         self.config.set("processing", "chunk_size", self.chunk_var.get())
         self.config.set("processing", "chunk_overlap", self.overlap_var.get())
-        self.config.set("processing", "dedup_threshold", self.similarity_var.get())
-        
-        # Explicitly ensure chunks directory is set correctly
-        chunks_dir = self.chunks_dir_var.get()
-        if not chunks_dir:
-            chunks_dir = "~/.aiembedder/chunks"  # Default if empty
-        self.config.set("processing", "chunks_directory", chunks_dir)
-        
+        self.config.set("processing", "similarity_threshold", self.similarity_var.get())
+        self.config.set("processing", "chunks_directory", self.chunks_dir_var.get())
         self.config.set("processing", "use_gpu", self.gpu_var.get())
         self.config.set("processing", "optimize_for_gpt4all", self.gpt4all_optimize_var.get())
+        self.config.set("processing", "respect_document_structure", self.structure_var.get())
+        self.config.set("processing", "chunk_flexibility_percent", self.flexibility_var.get())
         
         # Database settings
         self.config.set("database", "collection_name", self.collection_var.get())
-        self.config.set("database", "persist_directory", self.db_dir_var.get())
+        self.config.set("database", "directory", self.db_dir_var.get())
         self.config.set("database", "search_limit", self.limit_var.get())
         
         # GUI settings
         self.config.set("gui", "window_title", self.title_var.get())
         self.config.set("gui", "theme", self.theme_var.get())
-        self.config.set("gui", "log_level", self.log_level_var.get())
         
         # Advanced settings
-        self.config.set("gui", "log_directory", self.log_dir_var.get())
-        self.config.set("database", "embedding_model", self.model_var.get())
+        self.config.set("logging", "level", self.log_level_var.get())
+        self.config.set("logging", "directory", self.log_dir_var.get())
         
-        # Save configuration to file
+        # Save config
         self.config.save()
     
     def browse_db_dir(self):
@@ -413,4 +448,11 @@ class SettingsDialog:
     def on_cancel(self):
         """Handle cancel button click."""
         self.result = False
-        self.dialog.destroy() 
+        self.dialog.destroy()
+    
+    def toggle_flexibility(self):
+        """Enable or disable flexibility based on structure-aware chunking."""
+        if self.structure_var.get():
+            self.flexibility_entry.state(["!disabled"])
+        else:
+            self.flexibility_entry.state(["disabled"]) 

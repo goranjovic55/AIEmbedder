@@ -37,21 +37,27 @@ class Config:
                 "chunk_size": 400,
                 "chunk_overlap": 50,
                 "remove_stopwords": False,
-                "dedup_threshold": 0.95,
+                "similarity_threshold": 0.95,
                 "use_gpu": True,
                 "chunks_directory": str(Path.home() / ".aiembedder" / "chunks"),
-                "optimize_for_gpt4all": True
+                "optimize_for_gpt4all": True,
+                "respect_document_structure": True,
+                "chunk_flexibility_percent": 30
             },
             "database": {
                 "collection_name": "localdocs_collection",
-                "persist_directory": str(Path.home() / ".aiembedder" / "db"),
-                "embedding_model": "all-MiniLM-L6-v2"
+                "directory": str(Path.home() / ".aiembedder" / "db"),
+                "embedding_model": "all-MiniLM-L6-v2",
+                "search_limit": 5
             },
             "gui": {
                 "window_title": "AIEmbedder",
                 "window_size": "800x600",
-                "theme": "default",
-                "log_level": "INFO"
+                "theme": "default"
+            },
+            "logging": {
+                "level": "INFO",
+                "directory": str(Path.home() / ".aiembedder" / "logs")
             }
         }
     
@@ -72,6 +78,9 @@ class Config:
                             loaded_config[section][subkey] = loaded_config[key]
                             # Remove the flat key
                             del loaded_config[key]
+                    
+                    # Rename legacy keys for compatibility
+                    self._rename_legacy_keys(loaded_config)
                     
                     # Update the config with fixed format
                     self.config.update(loaded_config)
@@ -95,6 +104,34 @@ class Config:
             # If config is corrupt, restore defaults
             self.config = self._load_default_config()
             self.save()
+    
+    def _rename_legacy_keys(self, config: Dict[str, Any]) -> None:
+        """Rename legacy keys for compatibility.
+        
+        Args:
+            config: Config dictionary to update
+        """
+        # Database section renames
+        if "database" in config:
+            if "persist_directory" in config["database"]:
+                config["database"]["directory"] = config["database"].pop("persist_directory")
+                
+        # Processing section renames
+        if "processing" in config:
+            if "dedup_threshold" in config["processing"]:
+                config["processing"]["similarity_threshold"] = config["processing"].pop("dedup_threshold")
+                
+        # GUI section renames - move logging to its own section
+        if "gui" in config:
+            if "log_level" in config["gui"]:
+                if "logging" not in config:
+                    config["logging"] = {}
+                config["logging"]["level"] = config["gui"].pop("log_level")
+                
+            if "log_directory" in config["gui"]:
+                if "logging" not in config:
+                    config["logging"] = {}
+                config["logging"]["directory"] = config["gui"].pop("log_directory")
     
     def _is_valid_path(self, path_str: str) -> bool:
         """Check if a path string is valid.
@@ -163,8 +200,10 @@ class Config:
             # Use default path instead
             if key == "chunks_directory":
                 value = str(Path.home() / ".aiembedder" / "chunks")
-            elif key == "persist_directory":
+            elif key == "directory" and section == "database":
                 value = str(Path.home() / ".aiembedder" / "db")
+            elif key == "directory" and section == "logging":
+                value = str(Path.home() / ".aiembedder" / "logs")
                 
         self.config[section][key] = value
         self.save()

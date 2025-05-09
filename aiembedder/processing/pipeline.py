@@ -25,6 +25,8 @@ class TextProcessingPipeline:
         similarity_threshold: float = 0.95,
         use_gpu: bool = True,
         optimize_for_gpt4all: bool = True,
+        respect_document_structure: bool = True,
+        chunk_flexibility_percent: int = 30,
         progress_tracker: Optional[ProgressTracker] = None
     ):
         """Initialize the pipeline.
@@ -36,6 +38,8 @@ class TextProcessingPipeline:
             similarity_threshold: Threshold for considering chunks as duplicates
             use_gpu: Whether to use GPU for deduplication
             optimize_for_gpt4all: Whether to optimize chunks for GPT4All embeddings
+            respect_document_structure: Whether to respect document structure when chunking
+            chunk_flexibility_percent: How much chunk size can vary to align with document structure
             progress_tracker: Optional progress tracker
         """
         self.logger = logging.getLogger(__name__)
@@ -56,18 +60,24 @@ class TextProcessingPipeline:
             raise ProcessingError("Chunk overlap must be less than chunk size")
         if not 0 < similarity_threshold < 1:
             raise ProcessingError("Similarity threshold must be between 0 and 1")
+        if not 0 <= chunk_flexibility_percent <= 100:
+            raise ProcessingError("Chunk flexibility percent must be between 0 and 100")
         
         self.cleaning_level = cleaning_level
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.similarity_threshold = similarity_threshold
         self.optimize_for_gpt4all = optimize_for_gpt4all
+        self.respect_document_structure = respect_document_structure
+        self.chunk_flexibility_percent = chunk_flexibility_percent
         
         self.logger.info(
             f"Pipeline initialized with cleaning_level={cleaning_level}, "
             f"chunk_size={chunk_size}, chunk_overlap={chunk_overlap}, "
             f"similarity_threshold={similarity_threshold}, use_gpu={use_gpu}, "
-            f"optimize_for_gpt4all={optimize_for_gpt4all}"
+            f"optimize_for_gpt4all={optimize_for_gpt4all}, "
+            f"respect_document_structure={respect_document_structure}, "
+            f"chunk_flexibility_percent={chunk_flexibility_percent}"
         )
     
     def process_text(
@@ -96,20 +106,40 @@ class TextProcessingPipeline:
             self.progress_tracker.update_task(task_id, current=1, status="Cleaning text")
             cleaned_text = self.cleaner.clean(text, self.cleaning_level)
             
-            # Chunk text
+            # Chunk text using structure-aware chunking if enabled
             self.progress_tracker.update_task(task_id, current=2, status="Chunking text")
-            chunks = self.chunker.chunk(
-                cleaned_text,
-                chunk_size=self.chunk_size,
-                chunk_overlap=self.chunk_overlap
-            )
+            
+            if self.respect_document_structure:
+                self.logger.info("Using structure-aware chunking with flexibility")
+                chunk_data = self.chunker.chunk_with_structure(
+                    cleaned_text,
+                    target_chunk_size=self.chunk_size,
+                    chunk_overlap=self.chunk_overlap,
+                    flexibility_percent=self.chunk_flexibility_percent
+                )
+                # Extract just the text for deduplication
+                chunks = [chunk["text"] for chunk in chunk_data]
+            else:
+                # Use regular chunking
+                chunks = self.chunker.chunk(
+                    cleaned_text,
+                    chunk_size=self.chunk_size,
+                    chunk_overlap=self.chunk_overlap
+                )
+                # Create simple chunk data
+                chunk_data = [{"text": chunk} for chunk in chunks]
             
             # Deduplicate chunks
             self.progress_tracker.update_task(task_id, current=3, status="Deduplicating chunks")
-            unique_chunks = self.deduplicator.deduplicate(
+            
+            # Find indices of unique chunks
+            unique_indices = self.deduplicator.deduplicate_indices(
                 chunks,
                 threshold=self.similarity_threshold
             )
+            
+            # Filter to unique chunks
+            unique_chunk_data = [chunk_data[i] for i in unique_indices]
             
             # Add metadata
             self.progress_tracker.update_task(task_id, current=4, status="Adding metadata")
@@ -119,40 +149,50 @@ class TextProcessingPipeline:
             document_context = {}
             if metadata:
                 # Extract document info from metadata
-                if 'source' in metadata:
-                    document_context['source'] = metadata['source']
-                if 'file_name' in metadata:
-                    document_context['file_name'] = metadata['file_name']
-                if 'file_path' in metadata:
-                    document_context['file_path'] = metadata['file_path']
-                if 'file_size' in metadata:
-                    document_context['file_size'] = metadata['file_size']
+                for key in ['source', 'file_name', 'file_path', 'file_size']:
+                    if key in metadata:
+                        document_context[key] = metadata[key]
             
             # Calculate estimated content length (character count)
-            estimated_content_length = sum(len(chunk) for chunk in unique_chunks)
+            estimated_content_length = sum(len(chunk["text"]) for chunk in unique_chunk_data)
             
             # Process each chunk with enhanced metadata
-            for i, chunk in enumerate(unique_chunks):
+            for i, chunk_item in enumerate(unique_chunk_data):
+                # Extract text and any existing chunk metadata
+                chunk_text = chunk_item["text"]
+                
                 # Calculate chunk position information for better context
                 is_first = i == 0
-                is_last = i == len(unique_chunks) - 1
-                position = "beginning" if is_first else "end" if is_last else "middle"
+                is_last = i == len(unique_chunk_data) - 1
+                position = chunk_item.get("section", "middle")
+                if position == "Start":
+                    position = "beginning"
+                elif position == "End of Document":
+                    position = "end"
                 
                 # Create enhanced metadata for better GPT4All embeddings
                 chunk_data = {
-                    "text": chunk,
+                    "text": chunk_text,
                     "chunk_index": i,
-                    "total_chunks": len(unique_chunks),
+                    "total_chunks": len(unique_chunk_data),
                     "position": position,
                     "is_first_chunk": is_first,
                     "is_last_chunk": is_last,
                     "cleaning_level": self.cleaning_level,
                     "chunk_size": self.chunk_size,
                     "chunk_overlap": self.chunk_overlap,
-                    "content_length": len(chunk),
+                    "content_length": len(chunk_text),
                     "doc_content_length": estimated_content_length,
                     "processing_timestamp": str(int(time.time()))
                 }
+                
+                # Add section info if it exists
+                if "section" in chunk_item:
+                    chunk_data["section"] = chunk_item["section"]
+                
+                # Add token count if it exists
+                if "token_count" in chunk_item:
+                    chunk_data["token_count"] = chunk_item["token_count"]
                 
                 # Add document context from metadata
                 if document_context:
@@ -252,7 +292,7 @@ class TextProcessingPipeline:
             "chunk_size": self.chunk_size,
             "chunk_overlap": self.chunk_overlap,
             "similarity_threshold": self.similarity_threshold,
-            "use_gpu": self.deduplicator.use_gpu,
             "optimize_for_gpt4all": self.optimize_for_gpt4all,
-            "available_cleaning_levels": self.cleaner.get_cleaning_levels(),
+            "respect_document_structure": self.respect_document_structure,
+            "chunk_flexibility_percent": self.chunk_flexibility_percent
         } 
