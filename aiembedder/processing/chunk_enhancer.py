@@ -60,7 +60,8 @@ class ChunkEnhancer:
         """
         # Extract key information from metadata
         document_title = self._get_document_title(metadata)
-        position_info = self._get_position_info(metadata)
+        document_type = self._detect_document_type(metadata, chunk_text)
+        position_info = self._get_position_info(metadata, document_type)
         
         # Extract structural elements
         headings = self._extract_headings(chunk_text)
@@ -71,7 +72,7 @@ class ChunkEnhancer:
         normalized_text = self._normalize_text(chunk_text)
         
         # Create context prefix
-        context_prefix = self._create_context_prefix(document_title, position_info, headings)
+        context_prefix = self._create_context_prefix(document_title, document_type, position_info, headings)
         
         # Combine prefix with normalized text
         enhanced_text = f"{context_prefix}\n{normalized_text}"
@@ -82,6 +83,7 @@ class ChunkEnhancer:
             "headings": ", ".join(headings) if headings else "",
             "entities": ", ".join(entities) if entities else "",
             "keywords": ", ".join(keywords) if keywords else "",
+            "document_type": document_type,
             "enhanced": True
         })
         
@@ -114,33 +116,147 @@ class ChunkEnhancer:
         else:
             return "Document"
     
-    def _get_position_info(self, metadata: Dict[str, Any]) -> str:
+    def _detect_document_type(self, metadata: Dict[str, Any], text: str) -> str:
+        """Detect document type from metadata and content.
+        
+        Args:
+            metadata: Chunk metadata
+            text: Chunk text
+            
+        Returns:
+            Document type
+        """
+        # Try to get from metadata first
+        if "document_type" in metadata:
+            return metadata["document_type"]
+            
+        # Check file extension
+        if "source" in metadata:
+            file_path = metadata["source"]
+            ext = file_path.split('.')[-1].lower() if '.' in file_path else ""
+            
+            if ext in ["pdf"]:
+                # Look for common manual indicators in text
+                if any(kw in text.lower() for kw in ["user guide", "manual", "documentation", 
+                                                   "guide", "reference", "handbook"]):
+                    return "Manual"
+                # Check for tutorial content    
+                elif any(kw in text.lower() for kw in ["tutorial", "how to", "step by step"]):
+                    return "Tutorial"
+            
+            elif ext in ["docx", "doc"]:
+                # Check for formal document types
+                if any(kw in text.lower() for kw in ["report", "analysis", "summary", "findings"]):
+                    return "Report"
+                    
+            elif ext in ["txt", "md"]:
+                # Check for notes/documentation
+                if any(kw in text.lower() for kw in ["notes:", "note:", "todo:", "summary:"]):
+                    return "Notes"
+                    
+            # Look for Q&A patterns
+            if re.search(r'(?:Q:|Question:|Q[0-9]+:)', text):
+                return "Q&A"
+        
+        # Default type based on headings
+        headings = self._extract_headings(text)
+        if headings and any("chapter" in h.lower() for h in headings):
+            return "Manual"
+        elif len(headings) > 3:
+            return "Documentation"
+        
+        # Generic fallback
+        return "Document"
+    
+    def _get_position_info(self, metadata: Dict[str, Any], document_type: str) -> str:
         """Get position information from metadata.
         
         Args:
             metadata: Chunk metadata
+            document_type: Type of document
             
         Returns:
             Position information
         """
+        # If position is explicitly provided, use it
         if "position" in metadata:
             return metadata["position"].capitalize()
-        elif "is_first_chunk" in metadata and metadata["is_first_chunk"]:
-            return "Beginning"
-        elif "is_last_chunk" in metadata and metadata["is_last_chunk"]:
-            return "End"
-        elif "chunk_index" in metadata and "total_chunks" in metadata:
-            idx = metadata["chunk_index"]
-            total = metadata["total_chunks"]
-            if idx == 0:
-                return "Beginning"
-            elif idx == total - 1:
-                return "End"
+            
+        # Get basic position indicators
+        is_first = metadata.get("is_first_chunk", False)
+        is_last = metadata.get("is_last_chunk", False)
+        
+        idx = metadata.get("chunk_index", None)
+        total = metadata.get("total_chunks", None)
+        
+        if idx is not None and total is not None:
+            is_first = idx == 0
+            is_last = idx == total - 1
+            percentage = int((idx / total) * 100)
+        
+        # Tailor position information based on document type
+        if document_type == "Manual":
+            # For manuals, use chapter-oriented positioning
+            if is_first:
+                return "Introduction"
+            elif is_last:
+                return "Conclusion/Reference"
+            elif idx is not None and total is not None:
+                return f"Chapter {idx+1}/{total} ({percentage}%)"
             else:
-                return f"Middle ({idx+1}/{total})"
+                return "Main Content"
+                
+        elif document_type == "Tutorial":
+            # For tutorials, use step-oriented positioning
+            if is_first:
+                return "Setup/Introduction"
+            elif is_last:
+                return "Final Steps"
+            elif idx is not None and total is not None:
+                return f"Step {idx+1}/{total} ({percentage}%)"
+            else:
+                return "Instructions"
+                
+        elif document_type == "Q&A":
+            # For Q&A documents, use Q&A-oriented positioning
+            if idx is not None and total is not None:
+                return f"Q&A Section {idx+1}/{total} ({percentage}%)"
+            else:
+                return "Q&A Content"
+                
+        elif document_type == "Notes":
+            # For notes, use section-oriented positioning
+            if is_first:
+                return "Initial Notes"
+            elif is_last:
+                return "Final Notes"
+            elif idx is not None and total is not None:
+                return f"Note Section {idx+1}/{total} ({percentage}%)"
+            else:
+                return "Notes Content"
+                
+        elif document_type == "Report":
+            # For reports, use section-oriented positioning
+            if is_first:
+                return "Executive Summary"
+            elif is_last:
+                return "Conclusion/Recommendations"
+            elif idx is not None and total is not None:
+                return f"Section {idx+1}/{total} ({percentage}%)"
+            else:
+                return "Main Analysis"
+                
         else:
-            return "Section"
-    
+            # Default positioning for general documents
+            if is_first:
+                return "Beginning"
+            elif is_last:
+                return "End"
+            elif idx is not None and total is not None:
+                return f"Section {idx+1}/{total} ({percentage}%)"
+            else:
+                return "Main Content"
+                
     def _extract_headings(self, text: str) -> List[str]:
         """Extract potential headings from text.
         
@@ -287,13 +403,15 @@ class ChunkEnhancer:
         return normalized.strip()
     
     def _create_context_prefix(self, 
-                              title: str, 
+                              title: str,
+                              doc_type: str,
                               position: str, 
                               headings: List[str]) -> str:
         """Create a context prefix for the chunk.
         
         Args:
             title: Document title
+            doc_type: Document type
             position: Position information
             headings: Extracted headings
             
@@ -304,6 +422,9 @@ class ChunkEnhancer:
         
         # Add document title
         prefix_parts.append(f"Document: {title}")
+        
+        # Add document type
+        prefix_parts.append(f"Type: {doc_type}")
         
         # Add position
         prefix_parts.append(f"Position: {position}")
